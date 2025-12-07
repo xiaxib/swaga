@@ -1,0 +1,779 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="d-flex flex-wrap gap-3 align-items-end mb-3">
+    <div>
+        <label class="form-label">Магазин</label>
+        <form method="get" class="d-flex flex-wrap gap-2">
+            <select class="form-select" name="store_id" required>
+                <option value="">Выберите магазин</option>
+                {% for store in stores %}
+                    <option value="{{ store.id }}" {% if store.id == selected_store_id %}selected{% endif %}>{{ store.name }}{% if store.owner %} — {{ store.owner.email }}{% endif %}</option>
+                {% endfor %}
+            </select>
+            <button class="btn btn-outline-primary" type="submit">Открыть</button>
+        </form>
+    </div>
+    {% if selected_store_id %}
+    <div class="d-flex flex-wrap gap-2 align-items-end" id="fetchControls">
+        <input type="hidden" name="store_id" value="{{ selected_store_id }}">
+        <input type="hidden" name="action" value="fetch">
+        <div>
+            <label class="form-label">Упаковка (₽)</label>
+            <input type="number" step="0.01" class="form-control" id="packagingValue" value="{{ '%.2f'|format(packaging_value) }}">
+        </div>
+        <div>
+            <label class="form-label">Продвижение (%)</label>
+            <input type="number" step="0.01" class="form-control" id="promotionValue" value="{{ '%.2f'|format(promotion_value) }}">
+        </div>
+        <button class="btn btn-primary" type="button" id="startFetch"><i class="bi bi-arrow-repeat me-2"></i>Загрузить товары из Ozon</button>
+    </div>
+    <button class="btn btn-success" id="syncPrices"><i class="bi bi-cloud-upload me-2"></i>Обновить цены на Ozon</button>
+    <div class="d-flex flex-wrap gap-2 align-items-end">
+        <div>
+            <label class="form-label">Наценка для цены (%)</label>
+            <input type="number" step="0.01" class="form-control" id="bulkPriceMarkup" value="40">
+        </div>
+        <div>
+            <label class="form-label">Наценка для min_price (%)</label>
+            <input type="number" step="0.01" class="form-control" id="bulkMinMarkup" value="20">
+        </div>
+        <button class="btn btn-outline-primary" id="applyMarkup"><i class="bi bi-magic me-2"></i>Применить на выбранные</button>
+    </div>
+    {% endif %}
+</div>
+
+<div class="card glass p-3">
+    <div class="mb-3" id="fetchStatus" style="display:none;">
+        <div class="d-flex align-items-center gap-3 mb-2">
+            <div class="flex-grow-1">
+                <div class="progress" style="height:10px;">
+                    <div class="progress-bar" role="progressbar" style="width:0%;" id="fetchProgressBar"></div>
+                </div>
+            </div>
+            <span class="small text-muted" id="fetchProgressText">0%</span>
+        </div>
+        <div class="fetch-log small bg-light border rounded p-2" id="fetchLog" style="max-height:160px; overflow:auto;"></div>
+    </div>
+    <div class="d-flex flex-wrap gap-3 align-items-center justify-content-between mb-3">
+        <div class="d-flex flex-wrap gap-3 align-items-center">
+            <div class="badge bg-light text-dark border" id="selectedCount">Выбрано: 0</div>
+            <div class="d-flex gap-2 align-items-center page-size-wrapper">
+                <label class="form-label mb-0" for="pageSize">Строк на странице</label>
+                <div class="page-size-select clickable-select" title="Нажмите, чтобы выбрать количество строк">
+                    <i class="bi bi-caret-down-fill text-secondary"></i>
+                    <select class="form-select form-select-sm w-auto shadow-sm" id="pageSize">
+                        <option value="20">20</option>
+                        <option value="50">50</option>
+                        <option value="100" selected>100</option>
+                        <option value="200">200</option>
+                        <option value="500">500</option>
+                        <option value="1000">1000</option>
+                    </select>
+                </div>
+            </div>
+            <div class="d-flex gap-2 align-items-center flex-grow-1">
+                <label class="form-label mb-0" for="offerFilter">Поиск</label>
+                <input type="text" class="form-control form-control-sm" id="offerFilter" placeholder="Артикул или название">
+            </div>
+        </div>
+        <div class="d-flex flex-wrap gap-3 align-items-center" id="paginationControls">
+            <button class="btn btn-outline-secondary btn-sm" id="prevPage">←</button>
+            <span class="text-muted small" id="pageInfo">Страница 1 / 1</span>
+            <button class="btn btn-outline-secondary btn-sm" id="nextPage">→</button>
+        </div>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-striped align-middle data-table" id="productsTable">
+            <thead>
+                <tr class="header-row">
+                    <th class="text-center" style="width:40px;"><input type="checkbox" id="selectAll"></th>
+                    <th class="sortable" data-sort="offer_id">Артикул <span class="sort-indicator"></span></th>
+                    <th class="sortable" data-sort="name">Название <span class="sort-indicator"></span></th>
+                    <th class="sortable" data-sort="price">Цена <span class="sort-indicator"></span></th>
+                    <th class="sortable" data-sort="min_price">Мин. цена <span class="sort-indicator"></span></th>
+                    <th class="sortable" data-sort="stock_fbo">FBO остаток <span class="sort-indicator"></span></th>
+                    <th class="sortable" data-sort="stock_fbs">FBS остаток <span class="sort-indicator"></span></th>
+                    <th class="sortable" data-sort="commission">Комиссия <span class="sort-indicator"></span></th>
+                    <th class="sortable" data-sort="logistics">Логистика <span class="sort-indicator"></span></th>
+                    <th class="sortable" data-sort="acquiring">Эквайринг <span class="sort-indicator"></span></th>
+                    <th class="sortable" data-sort="delivery_cost">Доставка <span class="sort-indicator"></span></th>
+                    <th class="sortable" data-sort="processing_cost">Обработка <span class="sort-indicator"></span></th>
+                    <th class="sortable" data-sort="packaging">Упаковка <span class="sort-indicator"></span></th>
+                    <th class="sortable" data-sort="promotion">Продвижение <span class="sort-indicator"></span></th>
+                    <th class="sortable" data-sort="cost">Себестоимость <span class="sort-indicator"></span></th>
+                    <th class="sortable" data-sort="revenue">Выручка <span class="sort-indicator"></span></th>
+                    <th class="sortable" data-sort="margin">Маржа <span class="sort-indicator"></span></th>
+                    <th class="sortable" data-sort="markup">Наценка % <span class="sort-indicator"></span></th>
+                    <th>Действия</th>
+                </tr>
+            </thead>
+            <tbody id="productsBody"></tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+    const baseRows = {{ raw|safe }};
+    const selectedStoreId = {{ selected_store_id|tojson }};
+    const defaultPackaging = Number({{ '%.2f'|format(packaging_value) }});
+    const defaultPromotion = Number({{ '%.2f'|format(promotion_value) }});
+    $(document).ready(function(){
+        const state = {
+            rows: (baseRows || []).map((r) => ({
+                ...r,
+                price: Number(r.price || 0),
+                min_price: Number(r.min_price || r.price || 0),
+                cost: Number(r.cost || 0),
+                commission: Number(r.commission || 0),
+                commission_percent_fbs: Number(r.commission_percent_fbs || 0),
+                logistics: Number(r.logistics || 0),
+                acquiring: Number(r.acquiring || 0),
+                acquiring_percent: Number(r.acquiring_percent || 1.9),
+                delivery_cost: Number(r.delivery_cost || 0),
+                processing_cost: Number(r.processing_cost || 0),
+                packaging: Number(r.packaging || defaultPackaging),
+                promotion: Number(r.promotion || (Number(r.price || 0) * (defaultPromotion/100))),
+                revenue: Number(r.revenue || 0),
+                margin: Number(r.margin || 0),
+                markup: Number(r.markup || 0),
+                useDynamicAcquiring: false,
+            })),
+            search: '',
+            selected: new Set(),
+            pageSize: 100,
+            currentPage: 1,
+            sortKey: 'stock_fbs',
+            sortDir: 'desc',
+            packagingCost: defaultPackaging,
+            promotionRate: defaultPromotion / 100,
+            currentJob: null,
+        };
+
+        const body = $('#productsBody');
+        const progressWrap = $('#fetchStatus');
+        const progressBar = $('#fetchProgressBar');
+        const progressText = $('#fetchProgressText');
+        const fetchLogBox = $('#fetchLog');
+        let pollTimer = null;
+
+        function applyGlobalOverrides(){
+            state.rows = state.rows.map((row)=>({
+                ...row,
+                packaging: state.packagingCost,
+                promotion: Number(row.price || 0) * state.promotionRate,
+            }));
+        }
+
+        function refreshPromotion(row){
+            row.packaging = state.packagingCost;
+            row.promotion = Number(row.price || 0) * state.promotionRate;
+        }
+
+        applyGlobalOverrides();
+
+        $('#offerFilter').on('input', function(){
+            const value = ($(this).val() || '').toString().toLowerCase().replace(/\s+/g, '');
+            state.search = value;
+            state.currentPage = 1;
+            renderTable();
+        });
+
+        $('#packagingValue').on('change', function(){
+            const value = Number($(this).val());
+            state.packagingCost = Number.isFinite(value) ? value : state.packagingCost;
+            applyGlobalOverrides();
+            renderTable();
+        });
+
+        $('#promotionValue').on('change', function(){
+            const value = Number($(this).val());
+            state.promotionRate = Number.isFinite(value) ? value/100 : state.promotionRate;
+            applyGlobalOverrides();
+            renderTable();
+        });
+
+        $('#startFetch').on('click', function(){
+            startAsyncFetch();
+        });
+
+        function normalizeText(value){
+            return (value || '').toString().toLowerCase().replace(/\s+/g, '');
+        }
+
+        function rowMatchesFilters(row){
+            if(!state.search){
+                return true;
+            }
+            const offer = normalizeText(row.offer_id);
+            const name = normalizeText(row.name);
+            return offer.includes(state.search) || name.includes(state.search);
+        }
+
+        function sortRows(rows){
+            if(!state.sortKey){
+                return rows;
+            }
+            const key = state.sortKey;
+            const dir = state.sortDir === 'desc' ? -1 : 1;
+            const isNumeric = ['price','min_price','stock_fbo','stock_fbs','commission','logistics','acquiring','delivery_cost','processing_cost','packaging','promotion','cost','revenue','margin','markup'].includes(key);
+            return [...rows].sort((a,b) => {
+                const av = a[key];
+                const bv = b[key];
+                if(isNumeric){
+                    const an = Number(av) || 0;
+                    const bn = Number(bv) || 0;
+                    return (an - bn) * dir;
+                }
+                return (String(av || '')).localeCompare(String(bv || ''), 'ru', {numeric: true}) * dir;
+            });
+        }
+
+        function visibleRows(){
+            const filtered = sortRows(state.rows.filter(rowMatchesFilters));
+            const totalPages = Math.max(1, Math.ceil(filtered.length / state.pageSize));
+            if(state.currentPage > totalPages){
+                state.currentPage = totalPages;
+            }
+            const start = (state.currentPage - 1) * state.pageSize;
+            const end = start + state.pageSize;
+            return {rows: filtered.slice(start, end), total: filtered.length, totalPages};
+        }
+
+        function renderLogs(logs){
+            if(!fetchLogBox.length) return;
+            if(!logs || !logs.length){
+                fetchLogBox.text('Логи появятся после старта загрузки');
+                return;
+            }
+            const html = logs.map((l)=>`[${(l.time || '').slice(11,19)}] ${l.message || ''}`).join('<br>');
+            fetchLogBox.html(html);
+        }
+
+        function pollJob(jobId){
+            if(!jobId) return;
+            if(pollTimer){
+                clearInterval(pollTimer);
+            }
+            pollTimer = setInterval(()=>{
+                $.getJSON(`/api/products/progress/${jobId}`, (data)=>{
+                    if(!data.ok){
+                        clearInterval(pollTimer);
+                        pollTimer=null;
+                        progressText.text('Ошибка');
+                        return;
+                    }
+                    progressWrap.show();
+                    progressBar.css('width', `${Math.round(data.progress || 0)}%`);
+                    progressText.text(`${Math.round(data.progress || 0)}%`);
+                    renderLogs(data.logs);
+                    if(data.status === 'done'){
+                        clearInterval(pollTimer);
+                        pollTimer=null;
+                        progressText.text('Готово, получаем данные...');
+                        loadJobResult(jobId, 0, data.total || 0);
+                    }
+                    if(data.status === 'error'){
+                        clearInterval(pollTimer);
+                        pollTimer=null;
+                        progressText.text(data.error || 'Ошибка задачи');
+                        if(data.trace){
+                            fetchLogBox.html(`<div class="text-danger">${(data.error||'')}
+<pre class="small text-muted" style="white-space:pre-wrap;">${data.trace}</pre></div>`);
+                        }
+                    }
+                    if(data.error){
+                        progressText.text(data.error);
+                    }
+                }).fail(()=>{
+                    progressText.text('Ошибка запроса, повторяем...');
+                    if(pollTimer){
+                        clearInterval(pollTimer);
+                    }
+                    pollTimer = setInterval(()=> pollJob(jobId), 1500);
+            });
+        }, 1500);
+        }
+
+        function normalizeRows(list){
+            return (list || []).map((r)=>({
+                ...r,
+                price: Number(r.price || 0),
+                min_price: Number(r.min_price || r.price || 0),
+                cost: Number(r.cost || 0),
+                commission: Number(r.commission || 0),
+                commission_percent_fbs: Number(r.commission_percent_fbs || 0),
+                logistics: Number(r.logistics || 0),
+                acquiring: Number(r.acquiring || 0),
+                acquiring_percent: Number(r.acquiring_percent || 1.9),
+                delivery_cost: Number(r.delivery_cost || 0),
+                processing_cost: Number(r.processing_cost || 0),
+                packaging: state.packagingCost,
+                promotion: Number(r.price || 0) * state.promotionRate,
+                revenue: Number(r.revenue || 0),
+                margin: Number(r.margin || 0),
+                markup: Number(r.markup || 0),
+                useDynamicAcquiring: false,
+            }));
+        }
+
+        function loadJobResult(jobId, offset=0, total=0){
+            fetch(`/api/products/result/${jobId}?offset=${offset}&limit=1000`)
+                .then((r)=>r.json())
+                .then((resp)=>{
+                    if(!resp.ok){
+                        progressText.text(resp.error || 'Ошибка получения данных');
+                        return;
+                    }
+                    if(offset === 0){
+                        state.rows = [];
+                        state.selected = new Set();
+                    }
+                    const chunk = normalizeRows(resp.items);
+                    state.rows = state.rows.concat(chunk);
+                    const totalRows = resp.total || total || state.rows.length;
+                    const loaded = state.rows.length;
+                    progressText.text(`Получено ${loaded} из ${totalRows}`);
+                    if(resp.has_more && resp.next_offset != null){
+                        progressBar.css('width', `${Math.min(100, Math.round((loaded/Math.max(totalRows,1))*100))}%`);
+                        loadJobResult(jobId, resp.next_offset, totalRows);
+                    } else {
+                        progressBar.css('width','100%');
+                        state.currentPage = 1;
+                        applyGlobalOverrides();
+                        renderTable();
+                    }
+                })
+                .catch(()=>{
+                    progressText.text('Ошибка получения результатов');
+                });
+        }
+
+        function startAsyncFetch(){
+            if(!selectedStoreId){
+                alert('Сначала выберите магазин');
+                return;
+            }
+            if(pollTimer){
+                clearInterval(pollTimer);
+                pollTimer=null;
+            }
+            progressWrap.show();
+            progressBar.css('width','0%');
+            progressText.text('0%');
+            fetchLogBox.text('Стартуем...');
+            fetch('/api/products/start_fetch', {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({store_id: selectedStoreId, packaging: state.packagingCost, promotion: state.promotionRate*100})
+            })
+            .then(r=>r.json())
+            .then((resp)=>{
+                if(!resp.ok){
+                    fetchLogBox.text(resp.error || 'Не удалось запустить задачу');
+                    return;
+                }
+                state.currentJob = resp.job_id;
+                pollJob(resp.job_id);
+            })
+            .catch(()=>{
+                fetchLogBox.text('Ошибка запуска загрузки');
+            });
+        }
+
+        function formatMoney(value){
+            return Number(value || 0).toFixed(2);
+        }
+
+        function computeMetrics(row){
+            const commissionPercent = Number(row.commission_percent_fbs || 0);
+            const acquiringPercent = Number(row.acquiring_percent || 1.9);
+            const price = Number(row.price || 0);
+            const cost = Number(row.cost || 0);
+            const logistics = Number(row.logistics || 0);
+            const delivery = Number(row.delivery_cost || 0);
+            const processing = Number(row.processing_cost || 0);
+            const packaging = Number(row.packaging || 40);
+            const promotion = Number(row.promotion || (price * 0.01));
+            const commission = price * commissionPercent / 100;
+            const acquiring = row.useDynamicAcquiring ? price * acquiringPercent / 100 : Number(row.acquiring || 0);
+            const expenses = commission + logistics + acquiring + delivery + processing + packaging + promotion;
+            const revenue = price - expenses;
+            const margin = revenue - cost;
+            const markup = cost ? ((revenue - cost) / cost * 100) : 0;
+
+            return {
+                commission,
+                acquiring,
+                packaging,
+                promotion,
+                revenue,
+                margin,
+                markup,
+            };
+        }
+
+        function colorForMarkup(value){
+            const num = Number(value) || 0;
+            const clamped = Math.max(-100, Math.min(200, num));
+            const hue = ((clamped + 100) * 120) / 300; // -100 -> red (0), 200 -> green (120)
+            return `hsl(${hue.toFixed(0)}, 75%, 90%)`;
+        }
+
+        function highlightClass(key){
+            return state.sortKey === key ? 'sorted-col' : '';
+        }
+
+        function renderRow(row){
+            const metrics = computeMetrics(row);
+            const checked = state.selected.has(row.offer_id) ? 'checked' : '';
+            return `
+                <tr data-offer="${row.offer_id}">
+                    <td class="text-center"><input type="checkbox" class="row-check" ${checked}></td>
+                    <td class="${highlightClass('offer_id')}">${row.offer_id}</td>
+                    <td class="text-wrap ${highlightClass('name')}">${row.name || ''}</td>
+                    <td class="${highlightClass('price')}"><input type="number" step="0.01" class="form-control form-control-sm price-input" value="${formatMoney(row.price)}"></td>
+                    <td class="${highlightClass('min_price')}"><input type="number" step="0.01" class="form-control form-control-sm min-price-input" value="${formatMoney(row.min_price)}"></td>
+                    <td class="${highlightClass('stock_fbo')}">${row.stock_fbo || 0}</td>
+                    <td class="${highlightClass('stock_fbs')}">${row.stock_fbs || 0}</td>
+                    <td class="commission ${highlightClass('commission')}">${formatMoney(metrics.commission)}</td>
+                    <td class="logistics ${highlightClass('logistics')}">${formatMoney(row.logistics)}</td>
+                    <td class="acquiring ${highlightClass('acquiring')}">${formatMoney(metrics.acquiring)}</td>
+                    <td class="delivery ${highlightClass('delivery_cost')}">${formatMoney(row.delivery_cost)}</td>
+                    <td class="processing ${highlightClass('processing_cost')}">${formatMoney(row.processing_cost)}</td>
+                    <td class="packaging ${highlightClass('packaging')}">${formatMoney(row.packaging)}</td>
+                    <td class="promotion ${highlightClass('promotion')}">${formatMoney(metrics.promotion)}</td>
+                    <td class="${highlightClass('cost')}"><input type="number" step="0.01" class="form-control form-control-sm cost-input" value="${formatMoney(row.cost)}"></td>
+                    <td class="revenue fw-bold ${highlightClass('revenue')}">${formatMoney(metrics.revenue)}</td>
+                    <td class="margin fw-bold ${highlightClass('margin')}">${formatMoney(metrics.margin)}</td>
+                    <td class="${highlightClass('markup')}" style="background:${colorForMarkup(metrics.markup)};"><input type="number" step="0.01" class="form-control form-control-sm markup-input" value="${metrics.markup.toFixed(2)}"></td>
+                    <td><button class="btn btn-sm btn-outline-primary send-one">Отправить</button></td>
+                </tr>
+            `;
+        }
+
+        function renderTable(){
+            const {rows, total, totalPages} = visibleRows();
+            const html = rows.map(renderRow).join('');
+            body.html(html || '<tr><td colspan="17" class="text-center text-muted">Нет данных</td></tr>');
+            $('#pageInfo').text(total ? `Страница ${state.currentPage} / ${totalPages}` : 'Нет данных');
+            $('#prevPage').prop('disabled', state.currentPage <= 1 || !total);
+            $('#nextPage').prop('disabled', state.currentPage >= totalPages || !total);
+            const currentOffers = new Set(rows.map((r) => r.offer_id));
+            const selectedOnPage = Array.from(currentOffers).filter((id) => state.selected.has(id)).length;
+            $('#selectAll').prop('checked', total && selectedOnPage === currentOffers.size);
+            $('#selectAll').prop('indeterminate', selectedOnPage > 0 && selectedOnPage < currentOffers.size);
+            $('#selectedCount').text(`Выбрано: ${state.selected.size}`);
+            updateSortIndicators();
+        }
+
+        function findRow(offer){
+            return state.rows.find((r) => r.offer_id === offer);
+        }
+
+        function updateRowDom(row){
+            const tr = body.find(`tr[data-offer="${row.offer_id}"]`);
+            if(!tr.length){
+                return;
+            }
+            const metrics = computeMetrics(row);
+            const active = document.activeElement;
+            const skipPrice = active && active.classList.contains('price-input') && active.closest('tr') === tr[0];
+            const skipMin = active && active.classList.contains('min-price-input') && active.closest('tr') === tr[0];
+            const skipCost = active && active.classList.contains('cost-input') && active.closest('tr') === tr[0];
+            const skipMarkup = active && active.classList.contains('markup-input') && active.closest('tr') === tr[0];
+            if(!skipPrice){
+                tr.find('.price-input').val(formatMoney(row.price));
+            }
+            if(!skipMin){
+                tr.find('.min-price-input').val(formatMoney(row.min_price));
+            }
+            if(!skipCost){
+                tr.find('.cost-input').val(formatMoney(row.cost));
+            }
+            tr.find('.commission').text(formatMoney(metrics.commission));
+            tr.find('.logistics').text(formatMoney(row.logistics));
+            tr.find('.acquiring').text(formatMoney(metrics.acquiring));
+            tr.find('.delivery').text(formatMoney(row.delivery_cost));
+            tr.find('.processing').text(formatMoney(row.processing_cost));
+            tr.find('.packaging').text(formatMoney(row.packaging));
+            tr.find('.promotion').text(formatMoney(metrics.promotion));
+            tr.find('.revenue').text(formatMoney(metrics.revenue));
+            tr.find('.margin').text(formatMoney(metrics.margin));
+            if(!skipMarkup){
+                tr.find('.markup-input').val(metrics.markup.toFixed(2));
+            }
+        }
+
+        function recomputeRow(offerId, mode){
+            const row = findRow(offerId);
+            if(!row){
+                return;
+            }
+            const baseAcquiringPercent = Number(row.acquiring_percent || 1.9);
+            if(mode === 'price'){
+                const newPrice = Number(row.price || 0);
+                row.acquiring = newPrice * baseAcquiringPercent / 100;
+                row.promotion = newPrice * state.promotionRate;
+                row.packaging = state.packagingCost;
+            }
+            const metrics = computeMetrics(row);
+            row.commission = metrics.commission;
+            row.acquiring = metrics.acquiring;
+            row.revenue = metrics.revenue;
+            row.margin = metrics.margin;
+            row.markup = metrics.markup;
+            updateRowDom(row);
+        }
+
+        function computePriceForMarkup(row, targetMarkup){
+            const commissionPercent = Number(row.commission_percent_fbs || 0) / 100;
+            const acquiringPercent = Number(row.acquiring_percent || 1.9) / 100;
+            const promotionPercent = state.promotionRate;
+            const packaging = state.packagingCost;
+            const logistics = Number(row.logistics || 0);
+            const delivery = Number(row.delivery_cost || 0);
+            const processing = Number(row.processing_cost || 0);
+            const cost = Number(row.cost || 0);
+            const denominator = 1 - commissionPercent - acquiringPercent - promotionPercent;
+            if(denominator <= 0){
+                return 0;
+            }
+            const revenueTarget = cost * (1 + targetMarkup / 100);
+            const constExpenses = logistics + delivery + processing + packaging;
+            return (revenueTarget + constExpenses) / denominator;
+        }
+
+        function applyMarkupToRow(offerId, markupValue){
+            const row = findRow(offerId);
+            if(!row){
+                return;
+            }
+            const newPrice = computePriceForMarkup(row, markupValue);
+            if(newPrice > 0){
+                row.price = newPrice;
+                row.acquiring = newPrice * (Number(row.acquiring_percent || 1.9) / 100);
+                row.promotion = newPrice * state.promotionRate;
+                row.packaging = state.packagingCost;
+                row.markup = markupValue;
+                row.useDynamicAcquiring = true;
+                recomputeRow(offerId, 'price');
+            }
+        }
+
+        $('#productsTable').on('input', '.price-input, .cost-input, .min-price-input', function(){
+            const offerId = $(this).closest('tr').data('offer');
+            const row = findRow(offerId);
+            if(!row){
+                return;
+            }
+            if($(this).hasClass('price-input')){
+                row.price = Number($(this).val() || 0);
+                row.useDynamicAcquiring = true;
+                row.promotion = row.price * state.promotionRate;
+                row.packaging = state.packagingCost;
+            }
+            if($(this).hasClass('cost-input')){
+                row.cost = Number($(this).val() || 0);
+            }
+            if($(this).hasClass('min-price-input')){
+                row.min_price = Number($(this).val() || 0);
+            }
+            recomputeRow(offerId, 'price');
+        });
+
+        function applyMarkupInput(el){
+            const offerId = $(el).closest('tr').data('offer');
+            const markupValue = Number($(el).val() || 0);
+            applyMarkupToRow(offerId, markupValue);
+        }
+
+        $('#productsTable').on('change', '.markup-input', function(){
+            applyMarkupInput(this);
+        });
+
+        $('#productsTable').on('keyup', '.markup-input', function(e){
+            if(e.key === 'Enter'){
+                applyMarkupInput(this);
+            }
+        });
+
+        $('.page-size-select').on('click', function(event){
+            if(event.target.tagName.toLowerCase() !== 'select'){
+                $('#pageSize').trigger('focus').trigger('click');
+            }
+        });
+
+        $('#selectAll').on('change', function(){
+            const checked = $(this).is(':checked');
+            const current = visibleRows().rows;
+            current.forEach((row) => {
+                if(checked){
+                    state.selected.add(row.offer_id);
+                } else {
+                    state.selected.delete(row.offer_id);
+                }
+            });
+            renderTable();
+        });
+
+        $('#productsTable').on('change', '.row-check', function(){
+            const offerId = $(this).closest('tr').data('offer');
+            if($(this).is(':checked')){
+                state.selected.add(offerId);
+            } else {
+                state.selected.delete(offerId);
+            }
+            const current = visibleRows().rows;
+            const currentOffers = new Set(current.map((r) => r.offer_id));
+            const selectedOnPage = Array.from(currentOffers).filter((id) => state.selected.has(id)).length;
+            $('#selectAll').prop('checked', currentOffers.size > 0 && selectedOnPage === currentOffers.size);
+            $('#selectAll').prop('indeterminate', selectedOnPage > 0 && selectedOnPage < currentOffers.size);
+            $('#selectedCount').text(`Выбрано: ${state.selected.size}`);
+        });
+
+        function collectSelectedRows(){
+            return state.rows.filter((row) => state.selected.has(row.offer_id));
+        }
+
+        $('#applyMarkup').on('click', function(){
+            const priceMarkup = parseFloat($('#bulkPriceMarkup').val()) || 0;
+            const minMarkup = parseFloat($('#bulkMinMarkup').val()) || 0;
+            const selected = collectSelectedRows();
+            if(!selected.length){
+                alert('Отметьте товары для изменения');
+                return;
+            }
+            selected.forEach((row) => {
+                row.min_price = computePriceForMarkup(row, minMarkup) || row.min_price;
+                applyMarkupToRow(row.offer_id, priceMarkup);
+            });
+            renderTable();
+        });
+
+        $('#syncPrices').on('click', function(){
+            const storeId = {{ selected_store_id or 'null' }};
+            if(!storeId){
+                alert('Выберите магазин');
+                return;
+            }
+            const selectedRows = collectSelectedRows();
+            if(!selectedRows.length){
+                alert('Отметьте хотя бы один товар для отправки');
+                return;
+            }
+            const items = [];
+            selectedRows.forEach(function(row){
+                const price = Number(row.price || 0);
+                const cost = Number(row.cost || 0);
+                const minPrice = Number(row.min_price || price);
+                if(!row.offer_id || !price){
+                    return;
+                }
+                items.push({offer_id: row.offer_id, price: price, cost: cost, min_price: minPrice});
+            });
+            if(!items.length){
+                alert('Нет товаров для обновления');
+                return;
+            }
+            fetch('/products/update_price', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({store_id: storeId, items})
+            }).then(r => r.json()).then(data => {
+                if(data.ok){
+                    alert('Цены отправлены в Ozon');
+                } else {
+                    alert(data.error || 'Не удалось обновить цены');
+                }
+            }).catch(()=> alert('Не удалось обновить цены'));
+        });
+
+        $('#productsTable').on('click', '.send-one', function(){
+            const storeId = {{ selected_store_id or 'null' }};
+            if(!storeId){
+                alert('Выберите магазин');
+                return;
+            }
+            const offerId = $(this).closest('tr').data('offer');
+            const row = findRow(offerId);
+            if(!row){
+                alert('Нет данных для отправки');
+                return;
+            }
+            const price = Number(row.price || 0);
+            const cost = Number(row.cost || 0);
+            const minPrice = Number(row.min_price || price);
+            if(!offerId || !price){
+                alert('Нет данных для отправки');
+                return;
+            }
+            fetch('/products/update_price', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({store_id: storeId, items: [{offer_id: offerId, price: price, cost: cost, min_price: minPrice}]})
+            }).then(r => r.json()).then(data => {
+                if(data.ok){
+                    alert('Цена отправлена');
+                } else {
+                    alert(data.error || 'Не удалось обновить цену');
+                }
+            }).catch(()=> alert('Не удалось обновить цену'));
+        });
+
+        renderTable();
+
+        $('#pageSize').on('change', function(){
+            const val = Number($(this).val() || 100);
+            state.pageSize = val > 0 ? val : 100;
+            state.currentPage = 1;
+            renderTable();
+        });
+
+        $('#prevPage').on('click', function(){
+            if(state.currentPage > 1){
+                state.currentPage -= 1;
+                renderTable();
+            }
+        });
+
+        $('#nextPage').on('click', function(){
+            const totalPages = Math.max(1, Math.ceil(state.rows.filter(rowMatchesFilters).length / state.pageSize));
+            if(state.currentPage < totalPages){
+                state.currentPage += 1;
+                renderTable();
+            }
+        });
+
+        function updateSortIndicators(){
+            $('#productsTable thead th.sortable').each(function(){
+                const th = $(this);
+                const key = th.data('sort');
+                const indicator = th.find('.sort-indicator');
+                th.removeClass('sorted-col');
+                if(state.sortKey === key){
+                    indicator.text(state.sortDir === 'asc' ? '↑' : '↓');
+                    th.addClass('sorted-col');
+                } else {
+                    indicator.text('');
+                }
+            });
+        }
+
+        $('#productsTable thead').on('click', 'th.sortable', function(){
+            const key = $(this).data('sort');
+            if(!key){
+                return;
+            }
+            if(state.sortKey === key){
+                state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+            } else {
+                state.sortKey = key;
+                state.sortDir = 'desc';
+            }
+            state.currentPage = 1;
+            renderTable();
+        });
+    });
+</script>
+{% endblock %}
