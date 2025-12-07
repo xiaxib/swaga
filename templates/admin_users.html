@@ -1,0 +1,59 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2 class="fw-bold mb-3">Администрирование</h2>
+<div class="card glass p-3">
+    <div class="table-responsive">
+        <table class="table table-striped align-middle data-table" id="usersTable">
+            <thead>
+                <tr>
+                    <th>Email</th>
+                    <th>Создан</th>
+                    <th>Админ</th>
+                    <th>Ограничен</th>
+                    <th class="text-end">Действия</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for user in users %}
+                <tr>
+                    <td>{{ user.email }}</td>
+                    <td>{{ user.created_at|datetime }}</td>
+                    <td>{{ 'Да' if user.is_admin else 'Нет' }}</td>
+                    <td>{{ 'Да' if user.is_limited else 'Нет' }}</td>
+                    <td class="text-end">
+                        <form method="post" class="d-inline">
+                            <input type="hidden" name="user_id" value="{{ user.id }}">
+                            <input type="hidden" name="field" value="limited">
+                            <button class="btn btn-sm btn-outline-secondary">{% if user.is_limited %}Снять ограничения{% else %}Ограничить{% endif %}</button>
+                        </form>
+                        {% if user.id != current_user.id %}
+                        <form method="post" class="d-inline">
+                            <input type="hidden" name="user_id" value="{{ user.id }}">
+                            <input type="hidden" name="field" value="admin">
+                            <button class="btn btn-sm btn-outline-primary">{% if user.is_admin %}Снять админа{% else %}Назначить админом{% endif %}</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot>
+                <tr>
+                    <th>Email</th>
+                    <th>Создан</th>
+                    <th>Админ</th>
+                    <th>Ограничен</th>
+                    <th></th>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+$(document).ready(function(){
+    setupDataTable('#usersTable');
+});
+</script>
+{% endblock %}
