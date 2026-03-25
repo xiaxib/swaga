@@ -1,0 +1,8 @@
+aiogram==3.21.0
+SQLAlchemy==2.0.36
+pydantic==2.10.6
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+Pillow==11.1.0
+sympy==1.13.3
+pytesseract==0.3.13
